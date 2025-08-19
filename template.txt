@@ -1,0 +1,91 @@
+# ============================================
+# 1. Install dependencies (run once)
+# ============================================
+# !pip install pymupdf pandas
+
+# ============================================
+# 2. Import libraries
+# ============================================
+import fitz  # PyMuPDF
+import pandas as pd
+import json
+import subprocess
+import os
+
+# ============================================
+# 3. PDF Text Extraction
+# ============================================
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page in doc:
+        text += page.get_text("text") + "\n"
+    return text
+
+# ============================================
+# 4. Query Local LLM (CHANGED)
+# ============================================
+def query_ollama(prompt, model="mistral"):
+    """
+    Calls a local Ollama model with the given prompt.
+    Replace 'mistral' with any model you downloaded (llama2, gemma, etc.)
+    """
+    result = subprocess.run(
+        ["ollama", "run", model],
+        input=prompt.encode("utf-8"),
+        capture_output=True
+    )
+    return result.stdout.decode("utf-8")
+
+# ============================================
+# 5. Extract Experimental Conditions
+# ============================================
+def extract_conditions(text, model="mistral"):
+    prompt = f"""
+    Extract the following experimental parameters from the text:
+
+    - concentration
+    - hydrolysis ratio
+    - rate of base addition
+    - elemental cation ratio
+
+    Return ONLY a JSON array of objects with keys:
+    ["parameter", "value", "unit", "context"].
+
+    Text:
+    {text[:2000]}  # limit to first 2000 chars per call
+    """
+    response = query_ollama(prompt, model=model)
+    
+    try:
+        data = json.loads(response)
+    except:
+        print("⚠️ Could not parse JSON, raw output:", response[:300])
+        data = []
+    
+    return data
+
+# ============================================
+# 6. Process PDFs and Save to CSV
+# ============================================
+def process_pdfs(pdf_folder, output_csv="parsed_conditions.csv", model="mistral"):
+    all_data = []
+    
+    for file in os.listdir(pdf_folder):
+        if file.endswith(".pdf"):
+            print(f"Processing {file}...")
+            text = extract_text_from_pdf(os.path.join(pdf_folder, file))
+            conditions = extract_conditions(text, model=model)
+            for c in conditions:
+                c["source"] = file  # tag with filename
+            all_data.extend(conditions)
+    
+    df = pd.DataFrame(all_data)
+    df.to_csv(output_csv, index=False)
+    print(f"✅ Saved {len(df)} rows to {output_csv}")
+
+# ============================================
+# 7. Run
+# ============================================
+# Put your PDFs inside a folder, e.g., "./papers"
+process_pdfs(pdf_folder="./papers", output_csv="parsed_conditions.csv", model="mistral")
